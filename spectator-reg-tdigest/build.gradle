@@ -1,0 +1,4 @@
+dependencies {
+  compile project(':spectator-api')
+  compile 'com.tdunning:t-digest:3.0'
+}
