@@ -39,6 +39,10 @@ public class TDigestRegistry implements Registry {
     this.fallback = fallback;
   }
 
+  public TDigestRegistry() {
+    this(new DefaultRegistry());
+  }
+
   @Override public Clock clock() {
     return fallback.clock();
   }
@@ -59,11 +63,11 @@ public class TDigestRegistry implements Registry {
     return fallback.counter(id);
   }
 
-  @Override public DistributionSummary distributionSummary(Id id) {
-    return fallback.distributionSummary(id);
+  @Override public TDigestDistributionSummary distributionSummary(Id id) {
+    return new TDigestDistributionSummary(clock(), fallback.distributionSummary(id));
   }
 
-  @Override public Timer timer(Id id) {
+  @Override public TDigestTimer timer(Id id) {
     return new TDigestTimer(clock(), fallback.timer(id));
   }
 

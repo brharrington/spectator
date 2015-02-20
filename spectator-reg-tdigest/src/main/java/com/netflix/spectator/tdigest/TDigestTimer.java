@@ -16,18 +16,20 @@ public class TDigestTimer implements Timer {
 
   private final Clock clock;
   private final Timer wrapped;
-  private final TDigest digest;
+  private final StepDigest digest;
 
   TDigestTimer(Clock clock, Timer wrapped) {
     this.clock = clock;
     this.wrapped = wrapped;
-    this.digest = TDigest.createTreeDigest(100.0);
+    this.digest = new StepDigest(100.0, clock, 60000L);
   }
 
   @Override public void record(long amount, TimeUnit unit) {
-    final long nanos = unit.toNanos(amount);
-    digest.add(nanos / 1e9);
-    wrapped.record(amount, unit);
+    if (amount >= 0L) {
+      final long nanos = unit.toNanos(amount);
+      digest.current().add(nanos / 1e9);
+      wrapped.record(amount, unit);
+    }
   }
 
   @Override public <T> T record(Callable<T> f) throws Exception {
@@ -46,6 +48,14 @@ public class TDigestTimer implements Timer {
     } finally {
       record(clock.monotonicTime() - start, TimeUnit.NANOSECONDS);
     }
+  }
+
+  public double percentile(double p) {
+    if (p < 0.0 || p > 100.0) {
+      throw new IllegalArgumentException("p should be in [0.0, 100.0], got " + p);
+    }
+    final double q = p / 100.0;
+    return digest.poll().quantile(q);
   }
 
   @Override public long count() {
