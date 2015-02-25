@@ -17,65 +17,40 @@ package com.netflix.spectator.tdigest;
 
 import com.netflix.spectator.api.*;
 import com.netflix.spectator.api.Counter;
-import com.netflix.spectator.api.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
 import java.util.Iterator;
-import java.util.List;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 
 /** Registry that maps spectator types to servo. */
-public class TDigestRegistry implements Registry {
-
+public class TDigestRegistry extends AbstractRegistry {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(TDigestRegistry.class);
 
-  private final Registry fallback;
+  private static final Registry NOOP = new NoopRegistry();
 
   /** Create a new instance. */
-  public TDigestRegistry(Registry fallback) {
-    this.fallback = fallback;
-  }
-
   public TDigestRegistry() {
-    this(new DefaultRegistry());
+    this(Clock.SYSTEM);
   }
 
-  @Override public Clock clock() {
-    return fallback.clock();
+  /** Create a new instance. */
+  public TDigestRegistry(Clock clock) {
+    super(clock);
   }
 
-  @Override public Id createId(String name) {
-    return fallback.createId(name);
+  @Override protected Counter newCounter(Id id) {
+    return NOOP.counter(id);
   }
 
-  @Override public Id createId(String name, Iterable<Tag> tags) {
-    return fallback.createId(name, tags);
+  @Override protected TDigestDistributionSummary newDistributionSummary(Id id) {
+    return new TDigestDistributionSummary(clock(), id);
   }
 
-  @Override public void register(Meter meter) {
-    fallback.register(meter);
-  }
-
-  @Override public Counter counter(Id id) {
-    return fallback.counter(id);
-  }
-
-  @Override public TDigestDistributionSummary distributionSummary(Id id) {
-    return new TDigestDistributionSummary(clock(), fallback.distributionSummary(id));
-  }
-
-  @Override public TDigestTimer timer(Id id) {
-    return new TDigestTimer(clock(), fallback.timer(id));
-  }
-
-  @Override public Meter get(Id id) {
-    return fallback.get(id);
-  }
-
-  @Override public Iterator<Meter> iterator() {
-    return fallback.iterator();
+  @Override protected TDigestTimer newTimer(Id id) {
+    return new TDigestTimer(clock(), id);
   }
 }

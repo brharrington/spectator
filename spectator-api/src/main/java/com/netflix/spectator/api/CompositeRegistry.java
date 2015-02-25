@@ -35,6 +35,15 @@ final class CompositeRegistry implements Registry {
     this.registries = registries;
   }
 
+  <T extends Registry> T find(Class<T> c) {
+    for (Registry r : registries) {
+      if (c.isAssignableFrom(r.getClass())) {
+        return (T) r;
+      }
+    }
+    return null;
+  }
+
   @Override public Clock clock() {
     return clock;
   }

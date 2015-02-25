@@ -39,8 +39,8 @@ public class TDigestTimerTest {
   private final ManualClock clock = new ManualClock();
 
   private TDigestTimer newTimer(String name) {
-    final TDigestRegistry r = new TDigestRegistry(new DefaultRegistry(clock));
-    return r.timer(r.createId(name));
+    final TDigestRegistry r = new TDigestRegistry(clock);
+    return (TDigestTimer) r.timer(r.createId(name));
   }
 
   @Before
