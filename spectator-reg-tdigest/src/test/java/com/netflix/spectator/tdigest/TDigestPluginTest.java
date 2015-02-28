@@ -15,16 +15,9 @@
  */
 package com.netflix.spectator.tdigest;
 
-import com.netflix.spectator.api.DefaultRegistry;
 import com.netflix.spectator.api.Id;
 import com.netflix.spectator.api.ManualClock;
-import com.netflix.spectator.api.Measurement;
 import com.netflix.spectator.api.Registry;
-import com.netflix.spectator.api.Statistic;
-import com.netflix.spectator.api.Timer;
-import com.netflix.spectator.api.Utils;
-import com.tdunning.math.stats.AVLTreeDigest;
-import com.tdunning.math.stats.AbstractTDigest;
 import com.tdunning.math.stats.TDigest;
 import com.tdunning.math.stats.TreeDigest;
 import org.junit.Assert;
@@ -33,17 +26,13 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-import java.io.DataInputStream;
-import java.io.EOFException;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.math.BigInteger;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
-import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 
 @RunWith(JUnit4.class)
@@ -57,17 +46,22 @@ public class TDigestPluginTest {
     clock.setMonotonicTime(0L);
   }
 
-  private List<List<TDigestMeasurement>> readFromFile(File f) throws IOException {
-    List<List<TDigestMeasurement>> ms = new ArrayList<>();
-    try (DataInputStream in = new DataInputStream(new FileInputStream(f))) {
-      int size = in.readInt();
-      byte[] buf = new byte[size];
-      in.read(buf);
-      ms.add(Json.decode(buf));
-    } catch (EOFException e) {
-
+  private Map<Long, List<TDigestMeasurement>> readFromFile(File f) throws IOException {
+    Map<Long, List<TDigestMeasurement>> result = new HashMap<>();
+    try (TDigestReader in = new FileTDigestReader(f)) {
+      List<TDigestMeasurement> ms;
+      while (!(ms = in.read()).isEmpty()) {
+        for (TDigestMeasurement m : ms) {
+          List<TDigestMeasurement> tmp = result.get(m.timestamp());
+          if (tmp == null) {
+            tmp = new ArrayList<>();
+            result.put(m.timestamp(), tmp);
+          }
+          tmp.add(m);
+        }
+      }
     }
-    return ms;
+    return result;
   }
 
   @Test
@@ -75,12 +69,28 @@ public class TDigestPluginTest {
     final File f = new File("build/TDigestPlugin_writeData.out");
     f.getParentFile().mkdirs();
     if (f.exists()) f.delete();
-    System.err.println(f.getCanonicalPath());
     final TDigestRegistry r = new TDigestRegistry(clock);
     final TDigestPlugin p = new TDigestPlugin(r, new FileTDigestWriter(f));
 
+    // Adding a bunch of tags to test the effect of setting
+    // SmileGenerator.Feature.CHECK_SHARED_STRING_VALUES.
+    //
+    //            |   true |  false | savings |
+    // recorded   | 151150 | 157225 |    3.9% |
+    // empty      |   5030 |  11465 |   56.1% |
+    //
+    // With many recorded values the size of the digest is likely much bigger than the tags
+    // and the overall benefit is small. However, with few recorded values it leads to a big
+    // reduction.
     Id one = r.createId("one");
-    Id many = r.createId("many");
+    Id many = r.createId("many")
+        .withTag("region", "us-east-1")
+        .withTag("zone", "us-east-1a")
+        .withTag("ami", "ami-12345")
+        .withTag("node", "i-123456789")
+        .withTag("app", "foo")
+        .withTag("cluster", "foo-bar")
+        .withTag("asg",     "foo-bar-v001");
     for (int i = 0; i < 10000; ++i) {
       r.timer(one).record(i, TimeUnit.MILLISECONDS);
       r.timer(many.withTag("i", "" + (i / 100))).record(i, TimeUnit.MILLISECONDS);
@@ -92,8 +102,11 @@ public class TDigestPluginTest {
     clock.setWallTime(121000);
     p.writeData();
 
-    List<List<TDigestMeasurement>> ms = readFromFile(f);
-    for (List<TDigestMeasurement> m : ms) {
+    Map<Long, List<TDigestMeasurement>> result = readFromFile(f);
+    Assert.assertEquals(2, result.size());
+    Assert.assertNotNull(result.get(60000L));
+    Assert.assertNotNull(result.get(120000L));
+    for (List<TDigestMeasurement> m : result.values()) {
       checkRecord(r, m);
     }
   }

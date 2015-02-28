@@ -77,6 +77,9 @@ subprojects {
     configFile = rootProject.file('codequality/checkstyle.xml')
     sourceSets = [sourceSets.main]
   }
+  tasks.withType(Checkstyle) {
+    exclude '**/tdunning/**'
+  }
   
   findbugs {
     ignoreFailures = false

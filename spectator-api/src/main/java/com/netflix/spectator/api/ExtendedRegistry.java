@@ -44,6 +44,9 @@ public final class ExtendedRegistry implements Registry {
     return impl;
   }
 
+  /**
+   * Returns the first underlying registry that is an instance of {@code c}.
+   */
   public <T extends Registry> T underlying(Class<T> c) {
     if (c.isAssignableFrom(impl.getClass())) {
       return (T) impl;

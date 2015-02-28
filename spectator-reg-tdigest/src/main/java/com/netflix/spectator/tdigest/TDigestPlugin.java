@@ -8,6 +8,7 @@ import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executors;
@@ -41,7 +42,11 @@ public class TDigestPlugin {
 
     Runnable task = new Runnable() {
       @Override public void run() {
-        writeData();
+        try {
+          writeData();
+        } catch (Exception e) {
+          LOGGER.error("failed to publish percentile data", e);
+        }
       }
     };
 
@@ -51,15 +56,17 @@ public class TDigestPlugin {
   @PreDestroy
   public void shutdown() {
     executor.shutdown();
-    writer.close();
+    try {
+      writer.close();
+    } catch (IOException e) {
+      LOGGER.error("failed to close writer", e);
+    }
   }
 
   void writeData() {
-    System.err.println("here");
     LOGGER.debug("starting collection of digests");
     List<TDigestMeasurement> ms = new ArrayList<>();
     for (Meter m : registry) {
-      //System.err.println(m.getClass());
       if (m instanceof TDigestMeter) {
         TDigestMeasurement measurement = ((TDigestMeter) m).measureDigest();
         ms.add(measurement);
@@ -67,10 +74,14 @@ public class TDigestPlugin {
     }
     if (!ms.isEmpty()) {
       LOGGER.debug("writing {} measurements", ms.size());
-      writer.write(ms);
+      try {
+        writer.write(ms);
+      } catch (IOException e) {
+        // TODO
+        e.printStackTrace();
+      }
     } else {
       LOGGER.debug("no digest measurements found, nothing to do");
-      System.err.println("here 2");
     }
   }
 }

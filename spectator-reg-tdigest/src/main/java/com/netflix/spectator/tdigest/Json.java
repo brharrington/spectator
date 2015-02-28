@@ -1,12 +1,12 @@
 package com.netflix.spectator.tdigest;
 
-import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.dataformat.smile.SmileFactory;
+import com.fasterxml.jackson.dataformat.smile.SmileGenerator;
+import com.fasterxml.jackson.dataformat.smile.SmileParser;
 import com.netflix.spectator.api.DefaultId;
-import com.netflix.spectator.api.Id;
 import com.netflix.spectator.api.Tag;
 import com.tdunning.math.stats.AVLTreeDigest;
 import com.tdunning.math.stats.TDigest;
@@ -23,9 +23,22 @@ import java.util.List;
  */
 final class Json {
 
-  private static final JsonFactory FACTORY = new SmileFactory();
+  private static final SmileFactory FACTORY = new SmileFactory();
+
+  static {
+    FACTORY
+        .enable(SmileGenerator.Feature.WRITE_HEADER)
+        .disable(SmileGenerator.Feature.WRITE_END_MARKER)
+        .enable(SmileGenerator.Feature.CHECK_SHARED_NAMES)
+        .enable(SmileGenerator.Feature.CHECK_SHARED_STRING_VALUES)
+        .disable(SmileParser.Feature.REQUIRE_HEADER);
+  }
 
   private Json() {
+  }
+
+  static JsonGenerator newGenerator(OutputStream out) throws IOException {
+    return FACTORY.createGenerator(out);
   }
 
   static void encode(TDigestMeasurement m, JsonGenerator gen) throws IOException {
@@ -76,8 +89,8 @@ final class Json {
     }
   }
 
+  // TODO
   static TDigestMeasurement decode(JsonParser parser) throws IOException {
-    //System.err.println("###### here");
     expect(parser, JsonToken.START_OBJECT);
     require("name".equals(parser.nextFieldName()), "expected name");
     DefaultId id = new DefaultId(parser.nextTextValue());
@@ -92,7 +105,11 @@ final class Json {
   }
 
   static List<TDigestMeasurement> decode(byte[] data) throws IOException {
-    JsonParser parser = FACTORY.createParser(data);
+    return decode(data, 0, data.length);
+  }
+
+  static List<TDigestMeasurement> decode(byte[] data, int offset, int length) throws IOException {
+    JsonParser parser = FACTORY.createParser(data, offset, length);
     List<TDigestMeasurement> ms = new ArrayList<>();
     expect(parser, JsonToken.START_ARRAY);
     while (parser.nextToken() == JsonToken.START_ARRAY) {

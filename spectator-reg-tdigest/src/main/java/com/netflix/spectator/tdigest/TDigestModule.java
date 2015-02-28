@@ -17,16 +17,8 @@ package com.netflix.spectator.tdigest;
 
 import com.amazonaws.services.kinesis.AmazonKinesisClient;
 import com.google.inject.AbstractModule;
-import com.google.inject.Provides;
 import com.netflix.config.ConfigurationManager;
-import com.netflix.discovery.DiscoveryClient;
-import com.netflix.iep.http.EurekaServerRegistry;
-import com.netflix.iep.http.RxHttp;
-import com.netflix.iep.http.ServerRegistry;
-import com.netflix.spectator.api.ExtendedRegistry;
-import com.netflix.spectator.api.Registry;
 import com.netflix.spectator.api.Spectator;
-import com.netflix.spectator.nflx.Plugin;
 import org.apache.commons.configuration.AbstractConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +32,9 @@ public class TDigestModule extends AbstractModule {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(TDigestModule.class);
 
+  private static final String ENDPOINT_PROP = "spectator.tdigest.kinesis.endpoint";
+  private static final String STREAM_PROP = "spectator.tdigest.kinesis.stream";
+
   private void loadProperties(String name) {
     try {
       ConfigurationManager.loadCascadedPropertiesFromResources(name);
@@ -49,33 +44,28 @@ public class TDigestModule extends AbstractModule {
   }
 
   private AmazonKinesisClient newKinesisClient(AbstractConfiguration cfg) {
-    String endpoint = cfg.getString("spectator.tdigest.kinesis.endpoint");
+    String endpoint = cfg.getString(ENDPOINT_PROP);
     AmazonKinesisClient client = new AmazonKinesisClient();
     client.setEndpoint(endpoint);
     return client;
   }
 
   @Override protected void configure() {
-    bind(RxHttp.class).asEagerSingleton();
-    bind(Plugin.class).asEagerSingleton();
-    bind(ExtendedRegistry.class).toInstance(Spectator.registry());
-    bind(Registry.class).toInstance(Spectator.registry());
-
     loadProperties("spectator-tdigest");
     AbstractConfiguration cfg = ConfigurationManager.getConfigInstance();
-    String stream = cfg.getString("spectator.tdigest.kinesis.stream");
-    TDigestRegistry registry = Spectator.registry().underlying(TDigestRegistry.class);
-    if (stream != null && registry != null) {
-      KinesisTDigestWriter writer = new KinesisTDigestWriter(newKinesisClient(cfg), stream);
-      TDigestPlugin plugin = new TDigestPlugin(registry, writer);
-      plugin.init();
-      bind(TDigestPlugin.class).toInstance(plugin);
+    String stream = cfg.getString(STREAM_PROP);
+    if (stream == null) {
+      throw new IllegalStateException("stream name property, " + STREAM_PROP + ", is not set");
     }
-  }
 
-  /** Returns an instance of a server registry based on eureka. */
-  @Provides
-  public ServerRegistry getServerRegistry(DiscoveryClient client) {
-    return new EurekaServerRegistry(client);
+    TDigestRegistry registry = Spectator.registry().underlying(TDigestRegistry.class);
+    if (registry == null) {
+      throw new IllegalStateException("TDigestRegistry is not being used");
+    }
+
+    KinesisTDigestWriter writer = new KinesisTDigestWriter(newKinesisClient(cfg), stream);
+    TDigestPlugin plugin = new TDigestPlugin(registry, writer);
+    plugin.init();
+    bind(TDigestPlugin.class).toInstance(plugin);
   }
 }

@@ -5,18 +5,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
-import java.util.List;
 import java.util.Random;
 
 /**
  * Created by brharrington on 2/24/15.
  */
-public class KinesisTDigestWriter implements TDigestWriter {
+public class KinesisTDigestWriter extends TDigestWriter {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(KinesisTDigestWriter.class);
-
-  // TODO: fill up 50k buffer. This assumes a ~12k worst case per measurement.
-  private static final int MAX_PER_RECORD = 4;
 
   private final Random random = new Random();
 
@@ -36,15 +32,8 @@ public class KinesisTDigestWriter implements TDigestWriter {
     return buf.toString();
   }
 
-  @Override public void write(List<TDigestMeasurement> measurements) {
-    try {
-      for (int i = 0; i < measurements.size(); i += MAX_PER_RECORD) {
-        byte[] data = Json.encode(measurements.subList(i, i + MAX_PER_RECORD));
-        client.putRecord(stream, ByteBuffer.wrap(data), partitionKey());
-      }
-    } catch (Exception e) {
-      LOGGER.error("failed to write to kinesis", e);
-    }
+  @Override void write(ByteBuffer data) {
+    client.putRecord(stream, data, partitionKey());
   }
 
   @Override public void close() {
