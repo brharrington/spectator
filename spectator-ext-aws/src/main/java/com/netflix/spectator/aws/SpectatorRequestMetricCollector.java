@@ -26,6 +26,7 @@ import com.netflix.spectator.api.Id;
 import com.netflix.spectator.api.Registry;
 import com.netflix.spectator.impl.Preconditions;
 
+import java.beans.Introspector;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
@@ -138,7 +139,7 @@ public class SpectatorRequestMetricCollector extends RequestMetricCollector {
      */
     //VisibleForTesting
     static String idName(String name) {
-        return "aws.request." + decapitalize(name);
+        return "aws.request." + Introspector.decapitalize(name);
     }
 
     private static Optional<List<Object>> notEmpty(List<Object> properties) {
@@ -170,7 +171,7 @@ public class SpectatorRequestMetricCollector extends RequestMetricCollector {
         public TagField(Field field, Function<Object, String> tagExtractor) {
             this.field = field;
             this.tagExtractor = tagExtractor;
-            this.name = decapitalize(field.name());
+            this.name = Introspector.decapitalize(field.name());
         }
 
         public String getName() {
@@ -180,18 +181,5 @@ public class SpectatorRequestMetricCollector extends RequestMetricCollector {
         public Optional<String> getValue(AWSRequestMetrics metrics) {
             return firstValue(metrics.getProperty(field), tagExtractor);
         }
-    }
-
-    private static String decapitalize(String s) {
-        if (s == null || s.isEmpty()) {
-            return s;
-        }
-
-        final char c = Character.toLowerCase(s.charAt(0));
-        if (c == s.charAt(0)) {
-            return s;
-        }
-
-        return c + s.substring(1);
     }
 }
