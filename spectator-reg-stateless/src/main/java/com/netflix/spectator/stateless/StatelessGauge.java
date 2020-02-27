@@ -18,43 +18,26 @@ package com.netflix.spectator.stateless;
 import com.netflix.spectator.api.Clock;
 import com.netflix.spectator.api.Gauge;
 import com.netflix.spectator.api.Id;
-import com.netflix.spectator.api.Measurement;
-import com.netflix.spectator.api.Statistic;
-import com.netflix.spectator.impl.AtomicDouble;
-
-import java.util.Collections;
 
 /**
  * Gauge that keeps track of the latest received value since the last time it was measured.
  */
 class StatelessGauge extends StatelessMeter implements Gauge {
 
-  private final AtomicDouble value;
-  private final Id stat;
-
   /** Create a new instance. */
   StatelessGauge(Id id, Clock clock, long ttl) {
     super(id, clock, ttl);
-    value = new AtomicDouble(Double.NaN);
-    stat = id.withTag(Statistic.gauge).withTags(id.tags());
   }
 
   @Override public void set(double v) {
-    value.set(v);
-    updateLastModTime();
+    send(v);
   }
 
   @Override public double value() {
-    return value.get();
+    return Double.NaN;
   }
 
-  @Override public Iterable<Measurement> measure() {
-    final double delta = value.getAndSet(Double.NaN);
-    if (Double.isNaN(delta)) {
-      return Collections.emptyList();
-    } else {
-      final Measurement m = new Measurement(stat, clock.wallTime(), delta);
-      return Collections.singletonList(m);
-    }
+  @Override public String typeInfo() {
+    return "g";
   }
 }

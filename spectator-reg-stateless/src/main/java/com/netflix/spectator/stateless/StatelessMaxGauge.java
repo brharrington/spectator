@@ -29,34 +29,20 @@ import java.util.Collections;
  */
 class StatelessMaxGauge extends StatelessMeter implements Gauge {
 
-  private final AtomicDouble value;
-  private final Id stat;
-
   /** Create a new instance. */
   StatelessMaxGauge(Id id, Clock clock, long ttl) {
     super(id, clock, ttl);
-    value = new AtomicDouble(0.0);
-    stat = id.withTag(Statistic.max).withTags(id.tags());
   }
 
   @Override public void set(double v) {
-    if (v > 0.0) {
-      value.max(v);
-      updateLastModTime();
-    }
+    send(v);
   }
 
   @Override public double value() {
-    return value.get();
+    return Double.NaN;
   }
 
-  @Override public Iterable<Measurement> measure() {
-    final double delta = value.getAndSet(0.0);
-    if (delta > 0.0) {
-      final Measurement m = new Measurement(stat, clock.wallTime(), delta);
-      return Collections.singletonList(m);
-    } else {
-      return Collections.emptyList();
-    }
+  @Override public String typeInfo() {
+    return "m";
   }
 }

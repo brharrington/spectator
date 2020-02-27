@@ -15,15 +15,17 @@
  */
 package com.netflix.spectator.stateless;
 
-import com.netflix.spectator.api.Clock;
-import com.netflix.spectator.api.Id;
-import com.netflix.spectator.api.Meter;
+import com.netflix.spectator.api.*;
+
+import java.util.Collections;
 
 /** Base class for core meter types used by {@link StatelessRegistry}. */
 abstract class StatelessMeter implements Meter {
 
   /** Base identifier for all measurements supplied by this meter. */
   protected final Id id;
+  private final StringBuilder buffer;
+  private final int valuePosition;
 
   /** Time source for checking if the meter has expired. */
   protected final Clock clock;
@@ -37,6 +39,19 @@ abstract class StatelessMeter implements Meter {
   /** Create a new instance. */
   StatelessMeter(Id id, Clock clock, long ttl) {
     this.id = id;
+
+    // Encode id and reuse for each send
+    this.buffer = new StringBuilder()
+        .append("1:")
+        .append(typeInfo())
+        .append(':')
+        .append(id.name());
+    for (Tag t : id.tags()) {
+      this.buffer.append(',').append(t.key()).append('=').append(t.value());
+    }
+    this.buffer.append(':');
+    this.valuePosition = this.buffer.length();
+
     this.clock = clock;
     this.ttl = ttl;
     lastUpdated = clock.wallTime();
@@ -46,7 +61,7 @@ abstract class StatelessMeter implements Meter {
    * Updates the last updated timestamp for the meter to indicate it is active and should
    * not be considered expired.
    */
-  void updateLastModTime() {
+  private void updateLastModTime() {
     lastUpdated = clock.wallTime();
   }
 
@@ -56,5 +71,22 @@ abstract class StatelessMeter implements Meter {
 
   @Override public boolean hasExpired() {
     return clock.wallTime() - lastUpdated > ttl;
+  }
+
+  @Override public Iterable<Measurement> measure() {
+    return Collections.emptyList();
+  }
+
+  protected abstract String typeInfo();
+
+  protected void send(double value) {
+    updateLastModTime();
+
+    // Clear any previous value if present
+    buffer.delete(valuePosition, buffer.length());
+
+    // Encode new value and send
+    buffer.append(value);
+    UdpUtils.send(buffer);
   }
 }
