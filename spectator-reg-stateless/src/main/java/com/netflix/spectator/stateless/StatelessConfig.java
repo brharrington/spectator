@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2019 Netflix, Inc.
+ * Copyright 2014-2021 Netflix, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -94,5 +94,14 @@ public interface StatelessConfig extends RegistryConfig {
    */
   default Map<String, String> commonTags() {
     return Collections.emptyMap();
+  }
+
+  /**
+   * Returns a rollup policy that will be applied to the measurements before sending.
+   * The policy will not be applied to data going to the streaming path. Default is a no-op
+   * policy.
+   */
+  default RollupPolicy rollupPolicy() {
+    return RollupPolicy.noop(commonTags());
   }
 }

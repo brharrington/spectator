@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2019 Netflix, Inc.
+ * Copyright 2014-2021 Netflix, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -56,6 +56,7 @@ public final class StatelessRegistry extends AbstractRegistry {
   private final URI uri;
   private final int batchSize;
   private final Map<String, String> commonTags;
+  private final RollupPolicy rollupPolicy;
 
   private final HttpClient client;
 
@@ -72,6 +73,7 @@ public final class StatelessRegistry extends AbstractRegistry {
     this.uri = URI.create(config.uri());
     this.batchSize = config.batchSize();
     this.commonTags = config.commonTags();
+    this.rollupPolicy = config.rollupPolicy();
     this.client = HttpClient.create(this);
   }
 
@@ -114,8 +116,8 @@ public final class StatelessRegistry extends AbstractRegistry {
 
   private void collectData() {
     try {
-      for (List<Measurement> batch : getBatches()) {
-        byte[] payload = JsonUtils.encode(commonTags, batch);
+      for (RollupPolicy.Result batch : getBatches()) {
+        byte[] payload = JsonUtils.encode(batch.commonTags(), batch.measurements());
         HttpResponse res = client.post(uri)
             .withConnectTimeout(connectTimeout)
             .withReadTimeout(readTimeout)
@@ -141,12 +143,19 @@ public final class StatelessRegistry extends AbstractRegistry {
   }
 
   /** Get a list of all measurements and break them into batches. */
-  List<List<Measurement>> getBatches() {
-    List<List<Measurement>> batches = new ArrayList<>();
-    List<Measurement> ms = getMeasurements();
-    for (int i = 0; i < ms.size(); i += batchSize) {
-      List<Measurement> batch = ms.subList(i, Math.min(ms.size(), i + batchSize));
-      batches.add(batch);
+  List<RollupPolicy.Result> getBatches() {
+    // Rollup policy can result multiple sets of metrics with different common tags. Batches
+    // are computed using sets with the same common tags. This avoids needing to merge the
+    // common tags into the ids and the larger payloads that would result from replicating them
+    // on all measurements.
+    List<RollupPolicy.Result> batches = new ArrayList<>();
+    List<RollupPolicy.Result> results = rollupPolicy.apply(getMeasurements());
+    for (RollupPolicy.Result result : results) {
+      List<Measurement> ms = result.measurements();
+      for (int i = 0; i < ms.size(); i += batchSize) {
+        List<Measurement> batch = ms.subList(i, Math.min(ms.size(), i + batchSize));
+        batches.add(new RollupPolicy.Result(result.commonTags(), batch));
+      }
     }
     return batches;
   }

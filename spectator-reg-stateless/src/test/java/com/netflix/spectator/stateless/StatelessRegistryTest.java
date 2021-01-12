@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2019 Netflix, Inc.
+ * Copyright 2014-2021 Netflix, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,15 +15,18 @@
  */
 package com.netflix.spectator.stateless;
 
+import com.netflix.spectator.api.Id;
 import com.netflix.spectator.api.ManualClock;
 import com.netflix.spectator.api.Measurement;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 
 public class StatelessRegistryTest {
@@ -35,7 +38,26 @@ public class StatelessRegistryTest {
     ConcurrentHashMap<String, String> props = new ConcurrentHashMap<>();
     props.put("stateless.frequency", "PT10S");
     props.put("stateless.batchSize", "3");
-    return props::get;
+    return new StatelessConfig() {
+      @Override
+      public String get(String k) {
+        return props.get(k);
+      }
+
+      @Override
+      public RollupPolicy rollupPolicy() {
+        return measurements -> {
+          List<Measurement> ms = measurements
+              .stream()
+              .map(m -> {
+                Id id = m.id().filterByKey(k -> !k.startsWith("_"));
+                return new Measurement(id, m.timestamp(), m.value());
+              })
+              .collect(Collectors.toList());
+          return Collections.singletonList(new RollupPolicy.Result(Collections.emptyMap(), ms));
+        };
+      }
+    };
   }
 
   @Test
@@ -84,8 +106,8 @@ public class StatelessRegistryTest {
       registry.counter("" + i).increment();
     }
     Assertions.assertEquals(3, registry.getBatches().size());
-    for (List<Measurement> batch : registry.getBatches()) {
-      Assertions.assertEquals(3, batch.size());
+    for (RollupPolicy.Result batch : registry.getBatches()) {
+      Assertions.assertEquals(3, batch.measurements().size());
     }
   }
 
@@ -94,10 +116,10 @@ public class StatelessRegistryTest {
     for (int i = 0; i < 7; ++i) {
       registry.counter("" + i).increment();
     }
-    List<List<Measurement>> batches = registry.getBatches();
+    List<RollupPolicy.Result> batches = registry.getBatches();
     Assertions.assertEquals(3, batches.size());
     for (int i = 0; i < batches.size(); ++i) {
-      Assertions.assertEquals((i < 2) ? 3 : 1, batches.get(i).size());
+      Assertions.assertEquals((i < 2) ? 3 : 1, batches.get(i).measurements().size());
     }
   }
 
@@ -107,12 +129,21 @@ public class StatelessRegistryTest {
       registry.counter("" + i).increment();
     }
     Assertions.assertEquals(3, registry.getBatches().size());
-    for (List<Measurement> batch : registry.getBatches()) {
-      Assertions.assertEquals(3, batch.size());
+    for (RollupPolicy.Result batch : registry.getBatches()) {
+      Assertions.assertEquals(3, batch.measurements().size());
     }
 
     clock.setWallTime(Duration.ofMinutes(15).toMillis() + 1);
     Assertions.assertEquals(0, registry.getBatches().size());
   }
 
+  @Test
+  public void rollupPolicy() {
+    registry.counter("foo", "_bar", "123", "baz", "456").increment();
+    List<RollupPolicy.Result> results = registry.getBatches();
+    Assertions.assertEquals(1, results.size());
+    Assertions.assertEquals(1, results.get(0).measurements().size());
+    Measurement m = results.get(0).measurements().get(0);
+    Assertions.assertEquals(Id.create("foo").withTags("baz", "456", "statistic", "count"), m.id());
+  }
 }
