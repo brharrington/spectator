@@ -1,0 +1,16 @@
+dependencies {
+  api project(':spectator-api')
+}
+
+jar {
+  manifest {
+    attributes(
+      "Automatic-Module-Name": "com.netflix.spectator.sidecar"
+    )
+  }
+}
+
+task run(type: JavaExec) {
+  classpath = sourceSets.main.runtimeClasspath
+  main = "com.netflix.spectator.sidecar.Main"
+}
