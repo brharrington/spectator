@@ -94,7 +94,7 @@ subprojects {
     profilers = ['stack', 'gc']
     includeTests = false
     duplicateClassesStrategy = DuplicatesStrategy.WARN
-    includes = ['.*Caching.*']
+    includes = ['.*DecodeShortAscii.*']
   }
 
   checkstyle {
