@@ -567,12 +567,14 @@ public interface Query {
   final class In implements KeyQuery {
     private final String k;
     private final Set<String> vs;
+    private final int cachedHashCode;
 
     /** Create a new instance. */
     In(String k, Set<String> vs) {
       Preconditions.checkArg(!vs.isEmpty(), "list of values for :in cannot be empty");
       this.k = Preconditions.checkNotNull(k, "k");
       this.vs = Preconditions.checkNotNull(vs, "vs");
+      this.cachedHashCode = computeHashCode();
     }
 
     @Override public String key() {
@@ -618,10 +620,14 @@ public interface Query {
       return k.equals(other.k) && vs.equals(other.vs);
     }
 
-    @Override public int hashCode() {
+    private int computeHashCode() {
       int result = k.hashCode();
       result = 31 * result + vs.hashCode();
       return result;
+    }
+
+    @Override public int hashCode() {
+      return cachedHashCode;
     }
   }
 
