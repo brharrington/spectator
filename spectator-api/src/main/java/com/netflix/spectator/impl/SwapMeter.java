@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2019 Netflix, Inc.
+ * Copyright 2014-2026 Netflix, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,19 +36,9 @@ public abstract class SwapMeter<T extends Meter> implements Meter {
   protected final Registry registry;
 
   // Changes when the shape of the registry changes, for example a registry being added to a
-  // composite. Feeds hasExpired().
+  // composite. Feeds both hasExpired() and get().
   private final LongSupplier versionSupplier;
   private volatile long currentVersion;
-
-  // Changes when a meter is removed, so this wrapper may be holding one that is no longer
-  // registered. Feeds get() only, never hasExpired(): callers such as PolledMeter treat expiry as
-  // licence to discard the meter, and removal happens on every cleanup pass.
-  private final LongSupplier resolveSupplier;
-  private volatile long currentResolveVersion;
-
-  // Set only by the constructor with no removal signal, so registries without one, such as
-  // CompositeRegistry, keep the original trigger.
-  private final boolean resolveOnUnderlyingExpiry;
 
   /** Id to use when performing a lookup after expiration. */
   protected final Id id;
@@ -58,41 +48,9 @@ public abstract class SwapMeter<T extends Meter> implements Meter {
 
   /** Create a new instance. */
   public SwapMeter(Registry registry, LongSupplier versionSupplier, Id id, T underlying) {
-    this(registry, versionSupplier, versionSupplier, versionSupplier.getAsLong(), id, underlying,
-        true);
-  }
-
-  /**
-   * Create a new instance with a dedicated signal for meter removal. {@code resolveVersion} must
-   * be sampled from {@code resolveSupplier} <i>before</i> {@code underlying} is resolved: sampled
-   * afterwards it would already account for a removal racing the resolution, leaving this wrapper
-   * bound to a meter that is no longer registered and silently dropping every later update.
-   * Sampling early can only cost one redundant re-resolution.
-   */
-  public SwapMeter(
-      Registry registry,
-      LongSupplier versionSupplier,
-      LongSupplier resolveSupplier,
-      long resolveVersion,
-      Id id,
-      T underlying) {
-    this(registry, versionSupplier, resolveSupplier, resolveVersion, id, underlying, false);
-  }
-
-  private SwapMeter(
-      Registry registry,
-      LongSupplier versionSupplier,
-      LongSupplier resolveSupplier,
-      long resolveVersion,
-      Id id,
-      T underlying,
-      boolean resolveOnUnderlyingExpiry) {
     this.registry = registry;
     this.versionSupplier = versionSupplier;
     this.currentVersion = versionSupplier.getAsLong();
-    this.resolveSupplier = resolveSupplier;
-    this.currentResolveVersion = resolveVersion;
-    this.resolveOnUnderlyingExpiry = resolveOnUnderlyingExpiry;
     this.id = id;
     this.underlying = unwrap(underlying);
   }
@@ -116,6 +74,20 @@ public abstract class SwapMeter<T extends Meter> implements Meter {
   }
 
   /**
+   * {@inheritDoc}
+   *
+   * <p>Delegates to the underlying meter rather than falling back to {@link #hasExpired()}, so
+   * that a wrapper nested inside another one, as {@code CompositeRegistry} creates, passes the
+   * cheap removal flag through instead of forcing the parent back onto a wall clock read. The
+   * version of this wrapper is deliberately not part of the answer: it is checked by this
+   * wrapper's own {@link #get()}, which the parent will reach on the next update.</p>
+   */
+  @Override public boolean isRemoved() {
+    final T meter = underlying;
+    return meter == null || meter.isRemoved();
+  }
+
+  /**
    * Set the underlying instance of the meter to use. This can be set to {@code null}
    * to indicate that the meter has expired and is no longer in the registry.
    */
@@ -124,31 +96,27 @@ public abstract class SwapMeter<T extends Meter> implements Meter {
   }
 
   /**
-   * Return the underlying meter, resolving a new one if the registry may have removed it.
+   * Return the underlying meter, resolving a new one if the registry has removed it.
    *
-   * <p>This runs on every meter update, so it checks a counter rather than
-   * {@code underlying.hasExpired()}, which for {@code AtlasMeter} costs a wall clock read. Which
-   * meter an update lands on is unchanged: one past its TTL but still registered resolves back to
-   * the same instance either way, and once cleanup removes it the counter moves.</p>
+   * <p>This runs on every meter update, so it asks the meter whether it is still registered
+   * rather than whether it has expired: for {@code AtlasMeter} the former is a flag set by the
+   * removal and the latter costs a wall clock read. Only a wrapper whose own meter was removed
+   * resolves again; one holding a live meter never does.</p>
    */
   public T get() {
-    // Sampled once: re-reading for the assignment could store a value newer than what lookup()
-    // observed, which would swallow a subsequent removal.
-    final long resolveVersion = resolveSupplier.getAsLong();
-    if (currentResolveVersion < resolveVersion) {
-      // Resolving also clears the staleness hasExpired() reports, since the meter just came from
-      // a fresh lookup.
-      currentVersion = versionSupplier.getAsLong();
-      underlying = unwrap(lookup());
-      // Published last, so a concurrent caller that sees the new version also sees the meter it
-      // describes. Publishing it first lets that caller skip the resolve and keep updating the
-      // instance this lookup just replaced, silently dropping the update.
-      currentResolveVersion = resolveVersion;
-    } else if (resolveOnUnderlyingExpiry && underlying.hasExpired()) {
-      currentVersion = versionSupplier.getAsLong();
-      underlying = unwrap(lookup());
+    // Sampled once, before the lookup: re-reading it for the assignment could store a version
+    // newer than the one lookup() observed, which would swallow the change it describes.
+    final long version = versionSupplier.getAsLong();
+    T meter = underlying;
+    if (meter == null || meter.isRemoved() || currentVersion < version) {
+      meter = unwrap(lookup());
+      underlying = meter;
+      // Published after the meter it describes, so a concurrent caller that sees the new version
+      // also sees the new meter. Publishing it first lets that caller skip the resolve and keep
+      // updating the instance this lookup just replaced, silently dropping the update.
+      currentVersion = version;
     }
-    return underlying;
+    return meter;
   }
 
   /**

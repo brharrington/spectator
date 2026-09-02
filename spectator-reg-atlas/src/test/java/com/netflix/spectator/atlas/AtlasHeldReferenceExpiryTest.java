@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2025 Netflix, Inc.
+ * Copyright 2014-2026 Netflix, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,9 +30,9 @@ import java.util.concurrent.TimeUnit;
  * meter behind it goes idle long enough to be removed by the cleanup pass, later updates through
  * that stale reference still have to reach the registry.
  *
- * <p>{@code SwapMeter.get()} detects this from a counter the registry bumps on removal rather than
- * from the TTL of the underlying meter, so the update path does not have to read the wall clock.
- * These tests pin that recovery down through the real Atlas registry.</p>
+ * <p>{@code SwapMeter.get()} detects this from a flag the registry sets on the meter as part of
+ * the removal rather than from the TTL of the underlying meter, so the update path does not have
+ * to read the wall clock. These tests pin that recovery down through the real Atlas registry.</p>
  */
 public class AtlasHeldReferenceExpiryTest {
 
@@ -113,10 +113,10 @@ public class AtlasHeldReferenceExpiryTest {
   }
 
   /**
-   * Updates through a held reference must not be silently dropped on the floor. Before the
-   * registry tracked a version, removal was noticed via the underlying TTL check; if that check
-   * is removed without a version bump the first update after removal refreshes the orphaned
-   * meter's timestamp, the reference never re-resolves, and every later update is lost.
+   * Updates through a held reference must not be silently dropped on the floor. Removal used to
+   * be noticed via the underlying TTL check; if that check is dropped without the removal being
+   * marked, the first update after removal refreshes the orphaned meter's timestamp, the
+   * reference never re-resolves, and every later update is lost.
    */
   @Test
   public void updatesAfterRemovalAreNotLost() {
@@ -211,5 +211,36 @@ public class AtlasHeldReferenceExpiryTest {
     // The update refreshed the meter, so it is no longer a candidate for removal.
     registry.removeExpiredMeters();
     Assertions.assertSame(original, registry.get(id));
+  }
+
+  /**
+   * {@code close()} empties the meter map without any meter having expired, so the recovery has
+   * to come from the removal being marked rather than from a TTL check. Held references are
+   * expected to outlive the registry they were created against.
+   */
+  @Test
+  public void heldCounterRecoversAfterCloseClearsTheRegistry() {
+    ManualClock clock = new ManualClock();
+    AtlasRegistry registry = newRegistry(clock);
+
+    Counter held = registry.counter("test.counter");
+    held.increment();
+
+    Id id = registry.createId("test.counter");
+    Meter original = registry.get(id);
+    Assertions.assertNotNull(original);
+    Assertions.assertFalse(original.hasExpired(),
+        "precondition: the meter is healthy, so only the removal mark can trigger a re-resolve");
+
+    registry.close();
+    Assertions.assertNull(registry.get(id), "close should have cleared the meter map");
+
+    held.increment();
+    Meter resurrected = registry.get(id);
+    Assertions.assertNotNull(resurrected, "held reference must re-register the meter");
+    Assertions.assertNotSame(original, resurrected);
+    clock.setWallTime(STEP);
+    Assertions.assertEquals(1.0, ((Counter) resurrected).actualCount(), 1e-12,
+        "the update must land on the re-registered meter, not on the cleared one");
   }
 }

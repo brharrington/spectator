@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2025 Netflix, Inc.
+ * Copyright 2014-2026 Netflix, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,30 +19,32 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 /**
- * The registry bumps a version when it removes a meter so that held references know to resolve
- * again. That signal must not leak into {@code hasExpired()}: callers treat a true result as
- * licence to discard the meter ({@code PolledMeter} drops it, {@code measurements()} filters it
- * out, {@code cleanupCachedState()} evicts it), and a {@link CompositeMeter} — which is what
+ * The registry marks a meter when it removes it so that held references know to resolve again.
+ * That signal must not leak into {@code hasExpired()}: callers treat a true result as licence to
+ * discard the meter ({@code PolledMeter} drops it, {@code measurements()} filters it out,
+ * {@code cleanupCachedState()} evicts it), and a {@link CompositeMeter} — which is what
  * {@code Spectator.globalRegistry()} is — reports expired only when all of its delegates do, so a
- * version based answer would blank out every meter in it after the first cleanup pass.
+ * removal based answer would blank out every meter in it after the first cleanup pass.
  */
 public class SwapMeterExpiryReportingTest {
 
   /**
-   * The constructor without a dedicated removal signal keeps the original trigger: it re-resolves
-   * when the underlying meter reports expired. {@code CompositeRegistry} still uses it and has no
-   * notion of meter removal, so dropping that trigger would leave its wrappers pinned to a stale
-   * delegate. Pinned here so the behavior cannot be removed silently.
+   * A meter type that does not implement {@code RemovableMeter} keeps the original trigger: the
+   * default {@code isRemoved()} falls back to {@code hasExpired()}, so the wrapper re-resolves
+   * when the underlying meter reports expired. Registries with no notion of meter removal, such
+   * as {@code CompositeRegistry} and the meters {@code ExpiringRegistry} creates, depend on that
+   * fallback; dropping it would leave their wrappers pinned to a stale delegate. Pinned here so
+   * the behavior cannot be removed silently.
    */
   @Test
-  public void legacyConstructorStillResolvesOnUnderlyingExpiry() {
+  public void defaultIsRemovedFallsBackToUnderlyingExpiry() {
     ManualClock clock = new ManualClock();
     ExpiringRegistry registry = new ExpiringRegistry(clock);
 
     Counter first = registry.counter("test");
     first.increment();
 
-    // Build a wrapper the way CompositeRegistry does: a constant version and no removal signal.
+    // Build a wrapper the way CompositeRegistry does, over a meter that is not a RemovableMeter.
     java.util.concurrent.atomic.AtomicInteger lookups =
         new java.util.concurrent.atomic.AtomicInteger();
     Id id = registry.createId("test");
@@ -63,7 +65,7 @@ public class SwapMeterExpiryReportingTest {
 
     swap.get();
     Assertions.assertEquals(1, lookups.get(),
-        "the version-only constructor must still re-resolve on underlying expiry");
+        "the default isRemoved() must still re-resolve on underlying expiry");
   }
 
   @Test
@@ -87,12 +89,12 @@ public class SwapMeterExpiryReportingTest {
   }
 
   /**
-   * The removal counter has to be sampled before the meter is looked up, not after; see
-   * {@link com.netflix.spectator.impl.SwapMeter} for why. The registry is subclassed here to run
-   * a removal in exactly that window.
+   * A meter removed between the lookup that resolved it and the wrapper being handed back must
+   * still be noticed, otherwise the caller writes to an instance that is no longer registered.
+   * The registry is subclassed here to run a removal in exactly that window.
    */
   @Test
-  public void removalCounterIsSampledBeforeTheMeterIsResolved() {
+  public void removalDuringResolutionIsNoticed() {
     ManualClock clock = new ManualClock();
 
     class RacingRegistry extends ExpiringRegistry {

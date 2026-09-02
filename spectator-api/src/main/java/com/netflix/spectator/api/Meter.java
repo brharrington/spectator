@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2019 Netflix, Inc.
+ * Copyright 2014-2026 Netflix, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,4 +36,18 @@ public interface Meter {
    * activity within a given time frame.
    */
   boolean hasExpired();
+
+  /**
+   * Indicates the meter is no longer registered, so a reference to it is stale and updates
+   * applied to it will not be reported. This is checked on every update through a reference the
+   * user holds, so implementations should make it cheap: a registry that removes expired meters
+   * can set a flag as part of the removal rather than deriving it from a clock reading.
+   *
+   * <p>Defaults to {@link #hasExpired()}, which is a safe over-approximation: a meter past its
+   * TTL that is still registered resolves back to the same instance, so the only cost of the
+   * default is a redundant lookup.</p>
+   */
+  default boolean isRemoved() {
+    return hasExpired();
+  }
 }

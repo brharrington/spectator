@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2021 Netflix, Inc.
+ * Copyright 2014-2026 Netflix, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import com.netflix.spectator.api.patterns.PolledMeter;
 import com.netflix.spectator.impl.Cache;
 import com.netflix.spectator.impl.Config;
 import com.netflix.spectator.impl.Preconditions;
+import com.netflix.spectator.impl.RemovableMeter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,7 +28,6 @@ import java.util.Map;
 import java.util.Spliterator;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 
@@ -37,19 +37,11 @@ import java.util.function.LongSupplier;
  */
 public abstract class AbstractRegistry implements Registry, AutoCloseable {
 
-  /** Not used for this registry, always return 0. Removal is tracked by {@link #removals}. */
-  private static final LongSupplier VERSION = () -> 0L;
-
   /**
-   * Incremented whenever a meter is removed from {@link #meters}, so the {@link SwapMeter} types
-   * handed out here notice their underlying meter is gone without reading the wall clock. Kept
-   * out of {@code VERSION} because that feeds {@code hasExpired()}, which callers act on
-   * destructively. One counter invalidates every outstanding wrapper rather than just the
-   * affected one, costing an extra lookup per held reference per cleanup pass.
+   * Not used for this registry, the shape never changes. Meters removed from {@link #meters} are
+   * marked, so a wrapper notices its own meter is gone without consulting this.
    */
-  private final AtomicLong removals = new AtomicLong();
-
-  private final LongSupplier removalSupplier = removals::get;
+  private static final LongSupplier VERSION = () -> 0L;
 
   /** Logger instance for the class. */
   protected final Logger logger;
@@ -248,38 +240,32 @@ public abstract class AbstractRegistry implements Registry, AutoCloseable {
   }
 
   @Override public final Counter counter(Id id) {
-    // Sampled before resolving so a removal racing the lookup is seen; see SwapMeter.
-    final long v = removals.get();
     Counter c = getOrCreate(id, Counter.class, NoopCounter.INSTANCE, counterFactory);
-    return new SwapCounter(this, VERSION, removalSupplier, v, c.id(), c);
+    return new SwapCounter(this, VERSION, c.id(), c);
   }
 
   @Override public final DistributionSummary distributionSummary(Id id) {
-    final long v = removals.get();
     DistributionSummary ds = getOrCreate(
         id,
         DistributionSummary.class,
         NoopDistributionSummary.INSTANCE,
         distSummaryFactory);
-    return new SwapDistributionSummary(this, VERSION, removalSupplier, v, ds.id(), ds);
+    return new SwapDistributionSummary(this, VERSION, ds.id(), ds);
   }
 
   @Override public final Timer timer(Id id) {
-    final long v = removals.get();
     Timer t = getOrCreate(id, Timer.class, NoopTimer.INSTANCE, timerFactory);
-    return new SwapTimer(this, VERSION, removalSupplier, v, t.id(), t);
+    return new SwapTimer(this, VERSION, t.id(), t);
   }
 
   @Override public final Gauge gauge(Id id) {
-    final long v = removals.get();
     Gauge g = getOrCreate(id, Gauge.class, NoopGauge.INSTANCE, gaugeFactory);
-    return new SwapGauge(this, VERSION, removalSupplier, v, g.id(), g);
+    return new SwapGauge(this, VERSION, g.id(), g);
   }
 
   @Override public final Gauge maxGauge(Id id) {
-    final long v = removals.get();
     Gauge g = getOrCreate(id, Gauge.class, NoopGauge.INSTANCE, maxGaugeFactory);
-    return new SwapMaxGauge(this, VERSION, removalSupplier, v, g.id(), g);
+    return new SwapMaxGauge(this, VERSION, g.id(), g);
   }
 
   /**
@@ -334,20 +320,24 @@ public abstract class AbstractRegistry implements Registry, AutoCloseable {
   }
 
   @Override public final Iterator<Meter> iterator() {
-    return new VersionedIterator(meters.values().iterator());
+    return new MarkingIterator(meters);
   }
 
   /**
-   * Bumps {@link #removals} on removal no matter who performs it. Sub-classes such as
-   * {@code AtlasRegistry} run their own cleanup pass on top of {@link #iterator()}, so the bump
-   * belongs here rather than in every caller.
+   * Marks removed meters so that any {@link com.netflix.spectator.impl.SwapMeter} still holding
+   * one resolves a fresh instance on its next update. Sub-classes such as {@code AtlasRegistry}
+   * run their own cleanup pass on top of {@link #iterator()}, so this belongs here rather than in
+   * every caller.
    */
-  private final class VersionedIterator implements Iterator<Meter> {
+  private static final class MarkingIterator implements Iterator<Meter> {
 
-    private final Iterator<Meter> delegate;
+    private final ConcurrentMap<Id, Meter> meters;
+    private final Iterator<Map.Entry<Id, Meter>> delegate;
+    private Map.Entry<Id, Meter> current;
 
-    VersionedIterator(Iterator<Meter> delegate) {
-      this.delegate = delegate;
+    MarkingIterator(ConcurrentMap<Id, Meter> meters) {
+      this.meters = meters;
+      this.delegate = meters.entrySet().iterator();
     }
 
     @Override public boolean hasNext() {
@@ -355,13 +345,29 @@ public abstract class AbstractRegistry implements Registry, AutoCloseable {
     }
 
     @Override public Meter next() {
-      return delegate.next();
+      current = delegate.next();
+      return current.getValue();
     }
 
     @Override public void remove() {
-      delegate.remove();
-      // Bump after the entry is gone, so a reader seeing the new value cannot still find it.
-      removals.incrementAndGet();
+      if (current == null) {
+        throw new IllegalStateException("next() must be called before remove()");
+      }
+      final Meter m = current.getValue();
+      // Conditional on the value so that a meter another thread registered for this id since
+      // next() is not deleted, which would leave it out of the map and unmarked, and any
+      // wrapper holding it writing to an instance that is never reported.
+      meters.remove(current.getKey(), m);
+      // Marked after the entry is gone, so a reader seeing the mark cannot still find it.
+      markRemoved(m);
+      current = null;
+    }
+  }
+
+  /** Tell a meter it is no longer registered, if its type supports it. */
+  private static void markRemoved(Meter m) {
+    if (m instanceof RemovableMeter) {
+      ((RemovableMeter) m).markRemoved();
     }
   }
 
@@ -451,8 +457,16 @@ public abstract class AbstractRegistry implements Registry, AutoCloseable {
       }
     }
     state.clear();
+    // Removing the meters marks them, so any outstanding SwapMeter has to resolve again. Each
+    // one is marked only after its entry is gone, as in MarkingIterator: marking while it is
+    // still registered would have the wrapper resolve straight back to the same marked instance
+    // and repeat the lookup on every update until the map is empty.
+    Iterator<Meter> it = iterator();
+    while (it.hasNext()) {
+      it.next();
+      it.remove();
+    }
+    // Anything registered while the loop above was running may not have been visited by it.
     meters.clear();
-    // Clearing the map removes every meter, so any outstanding SwapMeter has to resolve again.
-    removals.incrementAndGet();
   }
 }

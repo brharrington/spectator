@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2019 Netflix, Inc.
+ * Copyright 2014-2026 Netflix, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 package com.netflix.spectator.api;
 
+import com.netflix.spectator.impl.RemovableMeter;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -28,17 +29,22 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Updates through a held reference must not be lost while another thread is resolving the same
- * wrapper. The resolve version is published after the meter it describes, so a caller that sees
- * the new version also sees the new meter; publishing it first would let that caller skip the
- * resolve and keep writing to the instance the lookup just replaced.
+ * wrapper. Both threads read the removal flag off the meter they are holding, and the flag stays
+ * set until the wrapper has published the replacement, so a second caller arriving mid-resolve
+ * resolves as well rather than continuing to write to the instance the lookup is replacing.
  */
 public class SwapMeterConcurrentResolveTest {
 
-  /** Counter that reports itself expired once removed, like AtlasCounter past its TTL. */
-  private static final class ExpirableCounter implements Counter {
+  /**
+   * Counter that is marked on removal and expires with a flag, like {@code AtlasCounter} past its
+   * TTL. Implements {@link RemovableMeter} so the wrapper recovery under test goes through the
+   * same signal the Atlas registry uses rather than the {@code hasExpired()} fallback.
+   */
+  private static final class ExpirableCounter implements Counter, RemovableMeter {
     private final Id id;
     private final AtomicLong count = new AtomicLong();
     volatile boolean expired = false;
+    private volatile boolean removed = false;
 
     ExpirableCounter(Id id) {
       this.id = id;
@@ -50,6 +56,14 @@ public class SwapMeterConcurrentResolveTest {
 
     @Override public boolean hasExpired() {
       return expired;
+    }
+
+    @Override public boolean isRemoved() {
+      return removed;
+    }
+
+    @Override public void markRemoved() {
+      removed = true;
     }
 
     @Override public Iterable<Measurement> measure() {
