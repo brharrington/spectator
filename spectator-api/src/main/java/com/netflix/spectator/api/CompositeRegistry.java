@@ -16,6 +16,7 @@
 package com.netflix.spectator.api;
 
 import com.netflix.spectator.api.patterns.PolledMeter;
+import com.netflix.spectator.impl.Generation;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -26,12 +27,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiFunction;
-import java.util.function.LongSupplier;
 
 /**
  * Maps calls to zero or more sub-registries. If zero then it will act similar to the noop
@@ -44,8 +43,11 @@ public final class CompositeRegistry implements Registry {
   private final Clock clock;
 
   private final AtomicReference<Registry[]> registries;
-  private final AtomicLong version;
-  private final LongSupplier versionSupplier;
+
+  // Meters handed out are tagged with the generation of the shape they were built from. Changing
+  // the shape marks the outgoing generation stale, which is the signal for those meters to
+  // resolve again against the new set of sub-registries.
+  private volatile Generation generation;
 
   private final ConcurrentHashMap<Id, Object> state;
 
@@ -54,8 +56,7 @@ public final class CompositeRegistry implements Registry {
   CompositeRegistry(Clock clock) {
     this.clock = clock;
     this.registries = new AtomicReference<>(new Registry[0]);
-    this.version = new AtomicLong();
-    this.versionSupplier = version::get;
+    this.generation = new Generation();
     this.state = new ConcurrentHashMap<>();
   }
 
@@ -92,7 +93,7 @@ public final class CompositeRegistry implements Registry {
         System.arraycopy(rs, 0, tmp, 0, rs.length);
         tmp[rs.length] = registry;
         registries.set(tmp);
-        version.incrementAndGet();
+        rotateGeneration();
       }
     } finally {
       lock.unlock();
@@ -112,7 +113,7 @@ public final class CompositeRegistry implements Registry {
         if (pos < tmp.length)
           System.arraycopy(rs, pos + 1, tmp, pos, rs.length - pos - 1);
         registries.set(tmp);
-        version.incrementAndGet();
+        rotateGeneration();
       }
     } finally {
       lock.unlock();
@@ -124,10 +125,22 @@ public final class CompositeRegistry implements Registry {
     lock.lock();
     try {
       registries.set(new Registry[0]);
+      rotateGeneration();
       state.clear();
     } finally {
       lock.unlock();
     }
+  }
+
+  /**
+   * Install a fresh generation and mark the outgoing one stale, so the meters built from the
+   * previous shape resolve again. Called with {@link #lock} held, after the new shape is
+   * published: marking before that would send a meter back to the shape it is leaving.
+   */
+  private void rotateGeneration() {
+    final Generation previous = generation;
+    generation = new Generation();
+    previous.markStale();
   }
 
   @Override public Clock clock() {
@@ -186,7 +199,7 @@ public final class CompositeRegistry implements Registry {
   }
 
   @Override public Counter counter(Id id) {
-    return new SwapCounter(this, versionSupplier, id, newCounter(id));
+    return new SwapCounter(this, generation, id, newCounter(id));
   }
 
   private DistributionSummary newDistributionSummary(Id id) {
@@ -208,7 +221,7 @@ public final class CompositeRegistry implements Registry {
   }
 
   @Override public DistributionSummary distributionSummary(Id id) {
-    return new SwapDistributionSummary(this, versionSupplier, id, newDistributionSummary(id));
+    return new SwapDistributionSummary(this, generation, id, newDistributionSummary(id));
   }
 
   private Timer newTimer(Id id) {
@@ -230,7 +243,7 @@ public final class CompositeRegistry implements Registry {
   }
 
   @Override public Timer timer(Id id) {
-    return new SwapTimer(this, versionSupplier, id, newTimer(id));
+    return new SwapTimer(this, generation, id, newTimer(id));
   }
 
   private Gauge newGauge(Id id) {
@@ -252,7 +265,7 @@ public final class CompositeRegistry implements Registry {
   }
 
   @Override public Gauge gauge(Id id) {
-    return new SwapGauge(this, versionSupplier, id, newGauge(id));
+    return new SwapGauge(this, generation, id, newGauge(id));
   }
 
   private Gauge newMaxGauge(Id id) {
@@ -274,7 +287,7 @@ public final class CompositeRegistry implements Registry {
   }
 
   @Override public Gauge maxGauge(Id id) {
-    return new SwapGauge(this, versionSupplier, id, newMaxGauge(id));
+    return new SwapGauge(this, generation, id, newMaxGauge(id));
   }
 
   @Override public Meter get(Id id) {

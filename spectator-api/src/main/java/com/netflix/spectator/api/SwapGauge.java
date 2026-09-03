@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2019 Netflix, Inc.
+ * Copyright 2014-2026 Netflix, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,14 +17,18 @@ package com.netflix.spectator.api;
 
 import com.netflix.spectator.impl.SwapMeter;
 
-import java.util.function.LongSupplier;
+import com.netflix.spectator.impl.Generation;
 
 /** Wraps another gauge allowing the underlying type to be swapped. */
 final class SwapGauge extends SwapMeter<Gauge> implements Gauge {
 
   /** Create a new instance. */
-  SwapGauge(Registry registry, LongSupplier versionSupplier, Id id, Gauge underlying) {
-    super(registry, versionSupplier, id, underlying);
+  SwapGauge(Registry registry, Id id, Gauge underlying) {
+    super(registry, id, underlying);
+  }
+
+  SwapGauge(Registry registry, Generation generation, Id id, Gauge underlying) {
+    super(registry, generation, id, underlying);
   }
 
   @Override public Gauge lookup() {

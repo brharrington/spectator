@@ -18,15 +18,19 @@ package com.netflix.spectator.api;
 import com.netflix.spectator.impl.SwapMeter;
 
 import java.util.function.Consumer;
-import java.util.function.LongSupplier;
+import com.netflix.spectator.impl.Generation;
 import java.util.function.Supplier;
 
 /** Wraps another counter allowing the underlying type to be swapped. */
 final class SwapCounter extends SwapMeter<Counter> implements Counter {
 
   /** Create a new instance. */
-  SwapCounter(Registry registry, LongSupplier versionSupplier, Id id, Counter underlying) {
-    super(registry, versionSupplier, id, underlying);
+  SwapCounter(Registry registry, Id id, Counter underlying) {
+    super(registry, id, underlying);
+  }
+
+  SwapCounter(Registry registry, Generation generation, Id id, Counter underlying) {
+    super(registry, generation, id, underlying);
   }
 
   @Override public Counter lookup() {

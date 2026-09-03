@@ -351,4 +351,44 @@ public class CompositeRegistryTest {
     Assertions.assertEquals(2, r1.counter("test").count());
     Assertions.assertEquals(2, r2.counter("test").count());
   }
+
+  @Test
+  public void meterLookupAfterRemoveAll() {
+    CompositeRegistry r = new CompositeRegistry(clock);
+    Registry r1 = new DefaultRegistry(clock);
+    r.add(r1);
+
+    // A reference the user holds on to, resolved while r1 was in the composite.
+    Counter c = r.counter("test");
+    c.increment();
+    Assertions.assertEquals(1, r1.counter("test").count());
+
+    // removeAll installs an empty shape, so the held reference must stop reaching r1.
+    r.removeAll();
+    c.increment();
+    Assertions.assertEquals(1, r1.counter("test").count());
+  }
+
+  @Test
+  public void meterLookupAfterRemoveAllThenAdd() {
+    CompositeRegistry r = new CompositeRegistry(clock);
+    Registry r1 = new DefaultRegistry(clock);
+    Registry r2 = new DefaultRegistry(clock);
+    r.add(r1);
+
+    Counter c = r.counter("test");
+    c.increment();
+    Assertions.assertEquals(1, r1.counter("test").count());
+
+    // The held reference has to follow the composite through both shape changes, including the
+    // update in between, which lands while the composite is empty.
+    r.removeAll();
+    c.increment();
+    Assertions.assertEquals(1, r1.counter("test").count());
+
+    r.add(r2);
+    c.increment();
+    Assertions.assertEquals(1, r1.counter("test").count());
+    Assertions.assertEquals(1, r2.counter("test").count());
+  }
 }

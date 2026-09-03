@@ -15,6 +15,7 @@
  */
 package com.netflix.spectator.api;
 
+import com.netflix.spectator.impl.Generation;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -24,7 +25,6 @@ import java.util.function.LongSupplier;
 
 public class SwapMeterTest {
 
-  private static final LongSupplier VERSION = () -> 0L;
 
   private final ManualClock clock = new ManualClock();
   private final Registry registry = new DefaultRegistry();
@@ -40,8 +40,8 @@ public class SwapMeterTest {
   @Test
   public void wrappedCounters() {
     Counter c = new DefaultCounter(clock, counterId);
-    SwapCounter sc1 = new SwapCounter(registry, VERSION, counterId, c);
-    SwapCounter sc2 = new SwapCounter(registry, VERSION, counterId, sc1);
+    SwapCounter sc1 = new SwapCounter(registry, counterId, c);
+    SwapCounter sc2 = new SwapCounter(registry, counterId, sc1);
     Assertions.assertFalse(sc2.hasExpired());
     sc2.increment();
     Assertions.assertEquals(1, c.count());
@@ -54,7 +54,7 @@ public class SwapMeterTest {
     ExpiringRegistry registry = new ExpiringRegistry(clock);
     Counter c = registry.counter(counterId);
     clock.setWallTime(60000 * 30);
-    SwapCounter s1 = new SwapCounter(registry, VERSION, counterId, c);
+    SwapCounter s1 = new SwapCounter(registry, counterId, c);
     s1.increment();
     Assertions.assertEquals(1, c.count());
     Assertions.assertEquals(1, s1.count());
@@ -63,7 +63,7 @@ public class SwapMeterTest {
   @Test
   public void wrappedCounterBatchUpdater() throws Exception {
     Counter c = new DefaultCounter(clock, counterId);
-    SwapCounter sc = new SwapCounter(registry, VERSION, counterId, c);
+    SwapCounter sc = new SwapCounter(registry, counterId, c);
     try (Counter.BatchUpdater b = sc.batchUpdater(2)) {
       b.increment();
     }
@@ -84,7 +84,7 @@ public class SwapMeterTest {
   @Test
   public void wrappedTimerBatchUpdater() throws Exception {
     Timer t = new DefaultTimer(clock, timerId);
-    SwapTimer st = new SwapTimer(registry, VERSION, timerId, t);
+    SwapTimer st = new SwapTimer(registry, timerId, t);
     try (Timer.BatchUpdater b = st.batchUpdater(2)) {
       b.record(1, TimeUnit.NANOSECONDS);
     }
@@ -105,7 +105,7 @@ public class SwapMeterTest {
   @Test
   public void wrappedDistributionSummaryBatchUpdater() throws Exception {
     DistributionSummary d = new DefaultDistributionSummary(clock, distSummaryId);
-    SwapDistributionSummary sd = new SwapDistributionSummary(registry, VERSION, distSummaryId, d);
+    SwapDistributionSummary sd = new SwapDistributionSummary(registry, distSummaryId, d);
     try (DistributionSummary.BatchUpdater b = sd.batchUpdater(2)) {
       b.record(1);
     }
@@ -128,7 +128,7 @@ public class SwapMeterTest {
     ExpiringRegistry registry = new ExpiringRegistry(clock);
     Timer t = registry.timer(timerId);
     clock.setWallTime(60000 * 30);
-    SwapTimer s1 = new SwapTimer(registry, VERSION, timerId, t);
+    SwapTimer s1 = new SwapTimer(registry, timerId, t);
     s1.record(42, TimeUnit.NANOSECONDS);
     Assertions.assertEquals(1, t.count());
     Assertions.assertEquals(1, s1.count());
@@ -139,7 +139,7 @@ public class SwapMeterTest {
     ExpiringRegistry registry = new ExpiringRegistry(clock);
     Gauge c = registry.gauge(gaugeId);
     clock.setWallTime(60000 * 30);
-    SwapGauge s1 = new SwapGauge(registry, VERSION, gaugeId, c);
+    SwapGauge s1 = new SwapGauge(registry, gaugeId, c);
     s1.set(1.0);
     Assertions.assertEquals(1.0, c.value(), 1e-12);
     Assertions.assertEquals(1.0, s1.value(), 1e-12);
@@ -150,22 +150,22 @@ public class SwapMeterTest {
     ExpiringRegistry registry = new ExpiringRegistry(clock);
     DistributionSummary c = registry.distributionSummary(distSummaryId);
     clock.setWallTime(60000 * 30);
-    SwapDistributionSummary s1 = new SwapDistributionSummary(registry, VERSION, distSummaryId, c);
+    SwapDistributionSummary s1 = new SwapDistributionSummary(registry, distSummaryId, c);
     s1.record(1);
     Assertions.assertEquals(1, c.count());
     Assertions.assertEquals(1, s1.count());
   }
 
   @Test
-  public void versionUpdateExpiration() {
-    AtomicLong version = new AtomicLong();
+  public void generationUpdateExpiration() {
+    Generation generation = new Generation();
     Counter c = new DefaultCounter(clock, counterId);
-    SwapCounter sc = new SwapCounter(registry, version::get, counterId, c);
+    SwapCounter sc = new SwapCounter(registry, generation, counterId, c);
 
     sc.increment();
     Assertions.assertFalse(sc.hasExpired());
 
-    version.incrementAndGet();
+    generation.markStale();
     Assertions.assertTrue(sc.hasExpired());
     sc.increment();
     Assertions.assertFalse(sc.hasExpired());

@@ -20,7 +20,6 @@ import com.netflix.spectator.api.Measurement;
 import com.netflix.spectator.api.Meter;
 import com.netflix.spectator.api.Registry;
 
-import java.util.function.LongSupplier;
 
 /**
  * Base type for meters that allow the underlying implementation to be replaced with
@@ -35,10 +34,10 @@ public abstract class SwapMeter<T extends Meter> implements Meter {
   /** Registry used to lookup values after expiration. */
   protected final Registry registry;
 
-  // Changes when the shape of the registry changes, for example a registry being added to a
-  // composite. Feeds both hasExpired() and get().
-  private final LongSupplier versionSupplier;
-  private volatile long currentVersion;
+  // Marked stale when the shape of the registry changes, for example a registry being added to a
+  // composite. Replaced on resolution with the generation the fresh meter belongs to. Feeds both
+  // hasExpired() and get(), the same way the meter's own removal flag does.
+  private volatile Generation generation;
 
   /** Id to use when performing a lookup after expiration. */
   protected final Id id;
@@ -46,11 +45,15 @@ public abstract class SwapMeter<T extends Meter> implements Meter {
   /** Current meter to delegate operations. */
   private volatile T underlying;
 
-  /** Create a new instance. */
-  public SwapMeter(Registry registry, LongSupplier versionSupplier, Id id, T underlying) {
+  /** Create a new instance for a registry whose shape never changes. */
+  public SwapMeter(Registry registry, Id id, T underlying) {
+    this(registry, Generation.PERMANENT, id, underlying);
+  }
+
+  /** Create a new instance belonging to the given generation of the registry's shape. */
+  public SwapMeter(Registry registry, Generation generation, Id id, T underlying) {
     this.registry = registry;
-    this.versionSupplier = versionSupplier;
-    this.currentVersion = versionSupplier.getAsLong();
+    this.generation = generation;
     this.id = id;
     this.underlying = unwrap(underlying);
   }
@@ -70,7 +73,7 @@ public abstract class SwapMeter<T extends Meter> implements Meter {
 
   /** {@inheritDoc} Routine meter removal is deliberately not part of this signal. */
   @Override public boolean hasExpired() {
-    return currentVersion < versionSupplier.getAsLong() || underlying.hasExpired();
+    return generation.isStale() || underlying.hasExpired();
   }
 
   /**
@@ -79,7 +82,7 @@ public abstract class SwapMeter<T extends Meter> implements Meter {
    * <p>Delegates to the underlying meter rather than falling back to {@link #hasExpired()}, so
    * that a wrapper nested inside another one, as {@code CompositeRegistry} creates, passes the
    * cheap removal flag through instead of forcing the parent back onto a wall clock read. The
-   * version of this wrapper is deliberately not part of the answer: it is checked by this
+   * generation of this wrapper is deliberately not part of the answer: it is checked by this
    * wrapper's own {@link #get()}, which the parent will reach on the next update.</p>
    */
   @Override public boolean isRemoved() {
@@ -104,19 +107,28 @@ public abstract class SwapMeter<T extends Meter> implements Meter {
    * resolves again; one holding a live meter never does.</p>
    */
   public T get() {
-    // Sampled once, before the lookup: re-reading it for the assignment could store a version
-    // newer than the one lookup() observed, which would swallow the change it describes.
-    final long version = versionSupplier.getAsLong();
     T meter = underlying;
-    if (meter == null || meter.isRemoved() || currentVersion < version) {
-      meter = unwrap(lookup());
+    if (meter == null || meter.isRemoved() || generation.isStale()) {
+      final T looked = lookup();
+      // The lookup went through the registry, so the wrapper it returned carries the generation
+      // that is current now. Adopting it is what stops a shape change from re-resolving on every
+      // later update.
+      final Generation resolved = generationOf(looked);
+      meter = unwrap(looked);
       underlying = meter;
-      // Published after the meter it describes, so a concurrent caller that sees the new version
-      // also sees the new meter. Publishing it first lets that caller skip the resolve and keep
-      // updating the instance this lookup just replaced, silently dropping the update.
-      currentVersion = version;
+      // Published after the meter it describes, so a concurrent caller that sees the fresh
+      // generation also sees the fresh meter. Publishing it first lets that caller skip the
+      // resolve and keep updating the instance this lookup just replaced, dropping the update.
+      generation = resolved;
     }
     return meter;
+  }
+
+  /** Generation the registry attached to a freshly looked up meter, if it is one of ours. */
+  private Generation generationOf(T meter) {
+    return (meter instanceof SwapMeter<?> && registry == ((SwapMeter<?>) meter).registry)
+        ? ((SwapMeter<?>) meter).generation
+        : generation;
   }
 
   /**

@@ -15,22 +15,26 @@
  */
 package com.netflix.spectator.api;
 
+import com.netflix.spectator.impl.Generation;
 import com.netflix.spectator.impl.SwapMeter;
 
 import java.util.function.Consumer;
-import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 /** Wraps another distribution summary allowing the underlying type to be swapped. */
 final class SwapDistributionSummary extends SwapMeter<DistributionSummary> implements DistributionSummary {
 
   /** Create a new instance. */
+  SwapDistributionSummary(Registry registry, Id id, DistributionSummary underlying) {
+    super(registry, id, underlying);
+  }
+
   SwapDistributionSummary(
       Registry registry,
-      LongSupplier versionSupplier,
+      Generation generation,
       Id id,
       DistributionSummary underlying) {
-    super(registry, versionSupplier, id, underlying);
+    super(registry, generation, id, underlying);
   }
 
   @Override public DistributionSummary lookup() {

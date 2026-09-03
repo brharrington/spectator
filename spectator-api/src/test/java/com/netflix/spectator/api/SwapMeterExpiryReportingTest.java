@@ -49,7 +49,7 @@ public class SwapMeterExpiryReportingTest {
         new java.util.concurrent.atomic.AtomicInteger();
     Id id = registry.createId("test");
     com.netflix.spectator.impl.SwapMeter<Counter> swap =
-        new com.netflix.spectator.impl.SwapMeter<Counter>(registry, () -> 0L, id, first) {
+        new com.netflix.spectator.impl.SwapMeter<Counter>(registry, id, first) {
           @Override public Counter lookup() {
             lookups.incrementAndGet();
             return registry.counter(id);
